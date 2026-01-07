@@ -33,7 +33,9 @@
             <li>
               <NavFeatureLink to="/app/currency" feature="CURRENCY">Currency</NavFeatureLink>
             </li>
-
+            <li>
+              <NavFeatureLink to="/app/purchases">Purchases</NavFeatureLink>
+            </li>
             <li>
               <a href="javascript:void(0)">Clients (скоро)</a>
             </li>

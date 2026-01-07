@@ -11,6 +11,7 @@ import AppLayout from '@/shared/layout/AppLayout.vue';
 import DealsPage from '@/modules/deals/pages/DealsPage.vue';
 import MarketplacePage from '@/modules/marketplace/pages/MarketplacePage.vue';
 import CurrencyPage from '@/modules/currency/pages/CurrencyPage.vue';
+import PurchasesPage from "@/modules/marketplace/pages/PurchasesPage.vue";
 
 const routes: RouteRecordRaw[] = [
     { path: '/', redirect: '/app/login' },
@@ -35,6 +36,11 @@ const routes: RouteRecordRaw[] = [
                 name: 'currency',
                 component: CurrencyPage,
                 meta: { feature: 'CURRENCY' }, // <-- платная фича
+            },
+            {
+                path: 'purchases',
+                name: 'purchases',
+                component: PurchasesPage,
             },
 
             // позже: chat, reports и т.д. (тоже с meta.feature)

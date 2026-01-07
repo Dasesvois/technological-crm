@@ -1,0 +1,182 @@
+<template>
+  <div>
+    <div class="top">
+      <h1 class="page-title">Deals</h1>
+
+      <!-- Пока кнопка без логики — позже подключим модалку -->
+      <button class="create-btn" type="button" @click="onCreateClick">
+        + Создать сделку
+      </button>
+    </div>
+
+
+    <!-- Loading -->
+    <p v-if="isLoading" class="hint">Загружаем сделки...</p>
+
+    <!-- Error -->
+    <p v-else-if="isError" class="error">
+      Ошибка: {{ error?.message }}
+    </p>
+
+    <!-- Data -->
+    <div v-else>
+      <DealsFilters :status="statusFilter" @update:status="statusFilter = $event" />
+
+      <p class="hint"> Сделок: {{ filteredDeals.length }}</p>
+
+      <DealsTable :deals="filteredDeals" @edit="onEditClick" />
+
+      <DealFormModal
+          :open="modalOpen"
+          :mode="modalMode"
+          :initialDeal="editingDeal"
+          :busy="modalBusy"
+          :server-error="modalServerError"
+          @close="onModalClose"
+          @submit="onModalSubmit"
+          @delete="onModalDelete"
+      />
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import { useDealsQuery } from "../queries/useDealsQuery";
+import DealsFilters, { type StatusFilter } from '../components/DealsFilters.vue';
+import DealsTable from '../components/DealsTable.vue';
+import { useCreateDealMutation, useUpdateDealMutation } from '../queries/useDealsMutations';
+import DealFormModal from '../components/DealFormModal.vue';
+import type { Deal } from '../types';
+import { useDeleteDealMutation } from '../queries/useDealsMutations';
+import type { CreateDealPayload, UpdateDealPayload } from '../types';
+
+// Забираем данные из TanStack Query
+const { data, isLoading, isError, error } = useDealsQuery();
+
+// Локальный UI-фильтр (это НЕ серверное состояние, поэтому хранится тут)
+const statusFilter = ref<StatusFilter>('ALL');
+
+// Нормализуем deals (data может быть undefined до загрузки)
+const deals = computed(() => data.value ?? []);
+
+// Фильтрация
+const filteredDeals = computed(() => {
+  if(statusFilter.value === 'ALL') return deals.value
+  return deals.value.filter((d) => d.status === statusFilter.value)
+});
+
+function onCreateClick() {
+  modalOpen.value = true;
+  modalMode.value = 'create';
+  editingDeal.value = null;
+}
+
+function onEditClick(deal: Deal) {
+  modalOpen.value = true;
+  modalMode.value = 'edit';
+  editingDeal.value = deal;
+}
+
+function onModalClose() {
+  modalOpen.value = false;
+}
+
+const modalOpen = ref(false);
+const modalMode = ref<'create' | 'edit'>('create');
+const editingDeal = ref<Deal | null>(null);
+
+const createMutation = useCreateDealMutation();
+const updateMutation = useUpdateDealMutation();
+const deleteMutation = useDeleteDealMutation();
+
+const modalBusy = computed(() =>
+    createMutation.isPending.value ||
+    updateMutation.isPending.value ||
+    deleteMutation.isPending.value
+);
+const modalServerError = computed(() => {
+  const err =
+      createMutation.error.value ||
+      updateMutation.error.value ||
+      deleteMutation.error.value;
+  return err ? (err instanceof Error ? err.message : String(err)) : null;
+});
+
+async function onModalSubmit(payload: CreateDealPayload & { id?: string }) {
+  if(modalMode.value === 'create') {
+    await createMutation.mutateAsync({
+      title: payload.title,
+      status: payload.status,
+      amount: payload.amount,
+      currency: payload.currency,
+    });
+    modalOpen.value = false;
+    return;
+  }
+
+  // edit
+  if(!payload.id) return;
+
+  const updatePayload: UpdateDealPayload = {
+    id: payload.id,
+    title: payload.title,
+    status: payload.status,
+    amount: payload.amount,
+    currency: payload.currency,
+  };
+
+  await updateMutation.mutateAsync(updatePayload);
+  modalOpen.value = false;
+}
+
+async function onModalDelete(id: string) {
+  await deleteMutation.mutateAsync(id);
+  modalOpen.value = false;
+}
+</script>
+
+<style scoped>
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.create-btn {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.create-btn:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
+.hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.error {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #b91c1c;
+}
+</style>

@@ -1,0 +1,103 @@
+import type { CurrencyCode, RatesResponse } from '../types';
+
+// 1) Open Access endpoint без ключа (USD/EUR/RUB и т.д.)
+// Документация: https://open.er-api.com/v6/latest/USD
+function erApiUrl(base: CurrencyCode) {
+    return `https://open.er-api.com/v6/latest/${base}`;
+}
+
+// 2) Фолбэк: курсы ЦБ РФ (JSON)
+// https://www.cbr-xml-daily.ru/daily_json.js
+const CBR_DAILY_JSON = 'https://www.cbr-xml-daily.ru/daily_json.js';
+
+type ErApiResponse = {
+    result: 'success' | 'error';
+    base_code: string;
+    time_last_update_utc?: string;
+    rates?: Record<string, number>;
+    'error-type'?: string;
+};
+
+type CbrJson = {
+    Date?: string;
+    Valute?: Record<
+        string,
+        {
+            CharCode: string;
+            Value: number; // стоимость 1 единицы валюты в RUB
+            Nominal: number;
+        }
+    >;
+};
+
+export const ratesApi = {
+    async getLatest(base: CurrencyCode): Promise<RatesResponse> {
+        // --- Попытка №1: open.er-api.com ---
+        try {
+            const res = await fetch(erApiUrl(base));
+            if (!res.ok) throw new Error(`ER-API http ${res.status}`);
+
+            const data: ErApiResponse = await res.json();
+            if (data.result !== 'success' || !data.rates) {
+                throw new Error(`ER-API bad response: ${data['error-type'] ?? 'unknown'}`);
+            }
+
+            const rub = data.rates.RUB;
+            const usd = data.rates.USD;
+            const eur = data.rates.EUR;
+
+            if (typeof rub !== 'number' || typeof usd !== 'number' || typeof eur !== 'number') {
+                throw new Error('ER-API: missing RUB/USD/EUR rates');
+            }
+
+            return {
+                base,
+                date: data.time_last_update_utc,
+                rates: { RUB: rub, USD: usd, EUR: eur },
+            };
+        } catch (e) {
+            // --- Попытка №2: ЦБ РФ (через cbr-xml-daily.ru) ---
+            const res = await fetch(CBR_DAILY_JSON);
+            if (!res.ok) throw new Error(`CBR fallback http ${res.status}`);
+
+            const data: CbrJson = await res.json();
+
+            const usd = data.Valute?.USD;
+            const eur = data.Valute?.EUR;
+            if (!usd || !eur) throw new Error('CBR fallback: USD/EUR not found');
+
+            // CBR даёт курсы "в RUB": Value — сколько RUB за 1 валюту
+            // Считаем кросс-курсы для base (RUB/USD/EUR) и выдаём rates относительно base
+            // 1 USD = usd.Value RUB, 1 EUR = eur.Value RUB
+            const rubPerUsd = usd.Value / usd.Nominal;
+            const rubPerEur = eur.Value / eur.Nominal;
+
+            const rubPer: Record<CurrencyCode, number> = {
+                RUB: 1,
+                USD: rubPerUsd,
+                EUR: rubPerEur,
+            };
+
+            // rates[SYM] = сколько SYM за 1 base
+            const rates: Record<string, number> = {
+                RUB: rubPer[base] === 1 ? 1 : 1 / rubPer[base], // placeholder, ниже норм пересчёт
+            };
+
+            // Формула:
+            // 1 base = rubPer[base] RUB
+            // 1 SYM = rubPer[SYM] RUB
+            // => 1 base в SYM = rubPer[base] / rubPer[SYM]
+            const out: Record<CurrencyCode, number> = {
+                RUB: rubPer[base] / rubPer.RUB,
+                USD: rubPer[base] / rubPer.USD,
+                EUR: rubPer[base] / rubPer.EUR,
+            };
+
+            return {
+                base,
+                date: data.Date,
+                rates: out,
+            };
+        }
+    },
+};

@@ -1,0 +1,22 @@
+import {defineStore} from 'pinia';
+import type { FeatureCode } from "../types";
+
+type State = {
+    purchased: FeatureCode[]
+};
+
+export const useEntitlementsStore = defineStore('entitlements', {
+    state: (): State => ({
+        purchased: [],
+    }),
+
+    actions: {
+        buy(code: FeatureCode) {
+            if(!this.purchased.includes(code)) this.purchased.push(code);
+        },
+        has(code: FeatureCode) {
+            return this.purchased.includes(code);
+        },
+    },
+    
+});

@@ -1,0 +1,35 @@
+import { createApp } from 'vue';
+import { createPinia } from 'pinia';
+import piniaPluginPersistedstate from 'pinia-plugin-persistedstate';
+import App from './App.vue';
+import router from './router';
+import './assets/main.css';
+
+import { useAuthStore} from './modules/auth/stores/useAuthStore.ts';
+import { VueQueryPlugin, QueryClient } from '@tanstack/vue-query';
+
+const app = createApp(App);
+
+const pinia = createPinia();
+pinia.use(piniaPluginPersistedstate);
+
+app.use(pinia);
+app.use(router);
+
+// Восстановление сессии
+const authStore = useAuthStore();
+authStore.restoreSession();
+
+const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+          // чтобы запросы не дёргались слишком часто при фокусе окна
+          refetchOnWindowFocus: false,
+          retry: 1,
+      },
+    },
+});
+
+app.use(VueQueryPlugin, { queryClient });
+
+app.mount('#app');

@@ -1,0 +1,125 @@
+import { defineStore } from 'pinia';
+import { ref, computed } from 'vue';
+import type { User, LoginPayload } from '../types';
+import { authApi } from '../api/authApi';
+
+// Ключ для localStorage
+const STORAGE_KEY = 'rf_auth';
+
+interface StoredAuthData {
+    token: string;
+    user: User;
+}
+
+export const useAuthStore = defineStore('auth', () => {
+    // --- state ---
+
+    // Текущий токен (или null)
+    const token = ref<string | null>(null);
+
+    // Текущий пользователь (или null, если не залогинен)
+    const user = ref<User | null>(null);
+
+    // Флаг, показывающий, что сейчас идёт запрос логина
+    const isLoading = ref(false);
+
+    // Флаг, показывающий, что сейчас идёт запрос логина
+    const error = ref<string | null>(null);
+
+    // --- getters ---
+
+    // Флаг, показывающий, что пользователь залогинен
+    const isAuthenticated  = computed(() => !!token.value);
+
+    // Роль пользователя (по умолчанию "user", чтобы избежать undefined в шаблонах)
+    const userRole = computed(() => user.value?.role || 'user');
+
+    // --- internal helpers ---
+
+    // Сохранить данные в localStorage
+    function presistAuth(data: StoredAuthData) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }
+
+    // Удалить данные из localStorage
+    function clearPresistedAuth() {
+        localStorage.removeItem(STORAGE_KEY);
+    }
+
+    // --- actions ---
+
+    async function login(payload: LoginPayload) {
+        // Сбрасываем старую ошибку перед новым запросом
+        error.value = null;
+        isLoading.value = true;
+
+        try {
+            const response = await authApi.login(payload);
+
+            user.value = response.user;
+            token.value = response.token;
+
+            // Сохраняем в localStorage, чтобы сессия переживала перезагрузку страницы
+            presistAuth({
+                token: response.token,
+                user: response.user,
+            });
+        } catch (e) {
+            const message =
+                e instanceof Error ? e.message : 'Произошла ошибка при входе';
+            error.value = message;
+
+            // На всякий случай очищаем state, если что-то пошло не так
+            user.value = null;
+            token.value = null;
+            clearPresistedAuth();
+        } finally {
+            isLoading.value = false;
+        }
+    }
+
+    function logout() {
+        user.value = null;
+        token.value = null;
+        error.value = null;
+        clearPresistedAuth();
+    }
+
+    // Вызывается при старте приложения (в main.ts).
+    // Пробует достать данные из localStorage и восстановить сессию.// Пробует достать данные из localStorage и восстановить сессию.
+    function restoreSession() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return;
+
+            const parsed = JSON.parse(raw) as StoredAuthData;
+
+            // Минимальная проверка, что структура похожа на правду.
+            if (parsed.token && parsed.user && parsed.user.email) {
+                token.value = parsed.token;
+                user.value = parsed.user;
+            } else {
+                clearPresistedAuth();
+            }
+        } catch (e) {
+            // Если JSON битый — просто очищаем хранилище.
+            clearPresistedAuth();
+        }
+    }
+    return {
+        // state
+        user,
+        token,
+        isLoading,
+        error,
+
+        // getters
+        isAuthenticated,
+        userRole,
+
+        // actions
+        login,
+        logout,
+        restoreSession,
+    };
+})

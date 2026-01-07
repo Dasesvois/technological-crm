@@ -1,0 +1,20 @@
+import { computed, unref } from "vue";
+import { ratesApi } from "../api/ratesApi";
+import { useQuery } from "@tanstack/vue-query";
+import type { CurrencyCode, RatesResponse } from "../types";
+import type { MaybeRef } from "vue";
+
+export const RATES_QUERY_KEY = (base: CurrencyCode) => ["rates", base] as const;
+
+export function useRatesQuery(base: MaybeRef<CurrencyCode>) {
+    const baseValue = computed(() => unref(base));
+
+    return useQuery<RatesResponse, Error>({
+        queryKey: computed(() => RATES_QUERY_KEY(baseValue.value)),
+        queryFn: () => ratesApi.getLatest(baseValue.value),
+
+        // автообновление раз в 30 секунд (как в реальное времяни)
+        refetchInterval: 30_000,
+        staleTime: 20_000,
+    });
+}

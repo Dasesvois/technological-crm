@@ -1,0 +1,81 @@
+<template>
+  <div class="table">
+    <div class="row header">
+      <div>Title</div>
+      <div>Status</div>
+      <div>Amount</div>
+      <div>Currency</div>
+      <div>Created</div>
+    </div>
+
+    <div v-for="d in deals" :key="d.id" class="row clickable" @click="emit('edit', d)">
+      <div>{{ d.title }}</div>
+      <div>{{ d.status  }}</div>
+      <div>{{ d.amount  }}</div>
+      <div>{{ d.currency  }}</div>
+      <div>{{ formatDate(d.createdAt) }}</div>
+    </div>
+    <p v-if="deals.length === 0" class="empty">
+      Нет сделок по выбранному фильтру.
+    </p>
+  </div>
+</template>
+<script setup lang="ts">
+import type { Deal } from '../types';
+
+defineProps<{
+  deals: Deal[];
+}>();
+
+function formatDate(iso:string) {
+  return new Date(iso).toLocaleDateString();
+}
+
+const emit = defineEmits<{
+  (e: 'edit', deal: Deal): void;
+}>();
+
+function formatMoney(amount: number, currency: string) {
+  return new Intl.NumberFormat('ru-Ru', {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+</script>
+
+<style scoped>
+.table {
+  display: grid;
+  gap: 8px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  font-size: 14px;
+}
+
+.header {
+  background: #f9fafb;
+  font-weight: 600;
+}
+
+.empty {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.clickable {
+  cursor: pointer;
+}
+.clickable:hover {
+  border-color: #cbd5e1;
+}
+</style>

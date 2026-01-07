@@ -1,0 +1,40 @@
+import type { FeatureProduct } from './types';
+
+export const FEATURE_CATALOG: FeatureProduct[] = [
+    {
+        code: 'ЧАТ',
+        title: 'Live Currency + Converter',
+        description: 'Курсы валют в реальном времени + конвертер внутри CRM.',
+        price: 199,
+        currency: 'RUB',
+        billing: 'МЕСЯЦ',
+        status: 'ДОСТУПНО',
+    },
+    {
+        code: 'ЧАТ',
+        title: 'Team Chat',
+        description: 'Чат между пользователями CRM с историей и уведомлениями.',
+        price: 499,
+        currency: 'RUB',
+        billing: 'МЕСЯЦ',
+        status: 'В РАЗРАБОТКЕ',
+    },
+    {
+        code: 'ОТЧЕТЫ',
+        title: 'Advanced Reports',
+        description: 'Отчёты по сделкам и финансам, графики, экспорт.',
+        price: 899,
+        currency: 'RUB',
+        billing: 'МЕСЯЦ',
+        status: 'ВСКОРЕ',
+    },
+    {
+        code: 'ИИ-ПОМОЩЬ',
+        title: 'AI Assistant',
+        description: 'Подсказки по сделкам, автосводки и идеи для upsell.',
+        price: 1499,
+        currency: 'RUB',
+        billing: 'МЕСЯЦ',
+        status: 'ВСКОРЕ',
+    },
+];

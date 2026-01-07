@@ -1,0 +1,313 @@
+<template>
+  <div v-if="open" class="overlay" @click.self="emitClose">
+    <div class="modal">
+      <div class="header">
+        <h2 class="title">
+          {{ mode === 'create' ? 'Создание сделки' : 'Редактирование сделки' }}
+        </h2>
+
+        <button class="icon-btn" type="button" @click="emitClose">✕</button>
+      </div>
+
+      <!-- vee-validate: Form управляет сабмитом -->
+      <!--пришлось отказаться от Form т.к. @submit ожидает values, а не Event -->
+      <form class="form" @submit="onSubmit">
+        <div class="field">
+          <label>Название</label>
+          <Field class="input" name="title" placeholder="Напр. Подписка Pro" />
+          <ErrorMessage name="title" class="error" />
+        </div>
+
+        <div class="field">
+          <label>Сумма</label>
+          <!-- type="number" важно, но VeeValidate всё равно отдаст строку,
+               поэтому приведу к числу в submit -->
+          <Field class="input" name="amount" type="number" step="0.01" min="0" />
+          <ErrorMessage name="amount" class="error" />
+        </div>
+
+        <div class="field">
+          <label>Валюта</label>
+          <Field class="input" name="currency" as="select">
+            <option value="USD">USD</option>
+            <option value="EUR">EUR</option>
+            <option value="RUB">RUB</option>
+          </Field>
+          <ErrorMessage name="currency" class="error" />
+        </div>
+
+        <div class="field">
+          <label>Статус</label>
+          <Field class="input" name="status" as="select">
+            <option value="OPEN">OPEN</option>
+            <option value="WON">WON</option>
+            <option value="LOST">LOST</option>
+          </Field>
+          <ErrorMessage name="status" class="error" />
+        </div>
+
+        <div class="actions">
+          <!-- Delete показываем только при редактировании -->
+          <button
+              v-if="mode === 'edit' && initialDeal"
+              class="btn danger"
+              type="button"
+              @click="onDeleteClick"
+              :disabled="busy"
+          >
+            Удалить
+          </button>
+
+          <button class="btn secondary" type="button" @click="emitClose" :disabled="busy">
+            Отмена
+          </button>
+
+          <button class="btn primary" type="submit" :disabled="busy">
+            {{ busy ? 'Сохраняем...' : 'Сохранить' }}
+          </button>
+        </div>
+
+        <p v-if="serverError" class="server-error">
+          {{ serverError }}
+        </p>
+      </form>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, watch } from 'vue';
+import { Field, ErrorMessage, useForm } from 'vee-validate';
+import { toTypedSchema } from "@vee-validate/zod";
+import { z } from 'zod';
+
+import type { Deal, CreateDealPayload, DealStatus, CurrencyCode } from '../types';
+
+type Mode = 'create' | 'edit';
+
+type DealFormValues = {
+  title: string;
+  amount: number;
+  currency: CurrencyCode;
+  status: DealStatus;
+};
+
+const props = defineProps<{
+  open: boolean;
+  mode: Mode;
+  initialDeal?: Deal | null; // для edit
+  busy?: boolean; // чтобы блокировать кнопки при мутации
+  serverError?: string | null;
+}>();
+
+const emit = defineEmits<{
+  (e: 'close'): void;
+  (e: 'submit', payload: CreateDealPayload & { id?: string }): void;
+  (e: 'delete', id: string): void;
+}>();
+
+function emitClose() {
+  if (busy.value) return;
+  emit('close');
+}
+
+// Zod-схема формы: тут правила валидации
+const schema = toTypedSchema(
+  z.object({
+    title: z.string().trim().min(2, 'Минимум 2 символа'),
+    amount: z
+        .union([z.string(), z.number()])
+        .transform((v) => (typeof v === 'string' ? Number(v) : v))
+        .refine((v) => Number.isFinite(v), 'Введите число')
+        .refine((v) => v > 0, 'Сумма должна быть больше 0'),
+    currency: z.enum(['USD', 'EUR', 'RUB']),
+    status: z.enum(['OPEN', 'WON', 'LOST']),
+  })
+);
+
+// Значения по умолчанию
+const defaultValues = computed(() => {
+  if(props.mode === 'edit' && props.initialDeal) {
+    return {
+      title: props.initialDeal.title,
+      amount: props.initialDeal.amount,
+      currency: props.initialDeal.currency as CurrencyCode,
+      status: props.initialDeal.status as DealStatus,
+    };
+  }
+
+  return {
+    title: '',
+    amount: 1000,
+    currency: 'RUB' as CurrencyCode,
+    status: 'OPEN' as DealStatus,
+  };
+});
+
+const { handleSubmit, resetForm } = useForm<DealFormValues>({
+  validationSchema: schema,
+  initialValues: defaultValues.value,
+});
+
+// Когда открываем модалку / меняем initialDeal — обновляем форму
+watch(
+    () => [props.open, props.mode, props.initialDeal] as const,
+    () => {
+      resetForm({ values: defaultValues.value });
+    }
+);
+
+const busy = computed(() => !!props.busy);
+
+const onSubmit = handleSubmit((values: DealFormValues) => {
+  // values.amount уже number после трансформации в schema
+  const payload: CreateDealPayload & { id?: string } = {
+    title: values.title.trim(),
+    amount: values.amount as number,
+    currency: values.currency as CurrencyCode,
+    status: values.status as DealStatus,
+  };
+
+  // Если edit — добавим id, чтобы страница поняла, что делать update
+  if(props.mode === 'edit' && props.initialDeal) {
+    payload.id = props.initialDeal.id;
+  }
+
+  emit('submit', payload);
+});
+
+function onDeleteClick() {
+  if(busy.value) return;
+  if(!props.initialDeal) return;
+
+  // Сначала простой confirm - быстро и надёжно.
+  // Потом заменю на красивую модалку подтверждения.
+  const ok = window.confirm('Удалить сделку без возможности восстановления?');
+  if(!ok) return;
+
+  emit('delete', props.initialDeal.id);
+}
+</script>
+
+<style scoped>
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 50;
+}
+
+.modal {
+  width: 100%;
+  max-width: 520px;
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #e5e7eb;
+  padding: 14px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.form {
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 13px;
+  color: #374151;
+}
+
+.input {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  font-size: 14px;
+}
+
+.error {
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.danger {
+  background: #fff;
+  border-color: #ef4444;
+  color: #ef4444;
+}
+
+.danger:hover {
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.btn {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.primary {
+  background: #2563eb;
+  color: #fff;
+}
+
+.secondary {
+  background: #fff;
+  border-color: #d1d5db;
+  color: #111827;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.server-error {
+  margin: 0;
+  font-size: 12px;
+  color: #b91c1c;
+}
+</style>

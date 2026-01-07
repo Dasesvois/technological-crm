@@ -1,0 +1,48 @@
+import type { LoginPayload, LoginResponse, User } from '../types.ts';
+
+// Небольшая "база пользователей" в памяти
+const MOCK_USERS: User[] = [
+    {
+        id: 1,
+        name: 'Admin User',
+        email: 'admin@example.com',
+        role: 'admin',
+    },
+    {
+        id: 2,
+        name: 'Regular User',
+        email: 'user@example.com',
+        role: 'user',
+    },
+]
+
+// Простая функция поиска пользователя по email.
+function findUserByEmail(email: string): User | undefined {
+    return MOCK_USERS.find(user => user.email === email)
+}
+
+export const authApi = {
+    // Моковый логин.
+    // Имитируем запрос на сервер с небольшой задержкой.
+    async login(payload: LoginPayload): Promise<LoginResponse> {
+        const {email, password} = payload
+
+        // Имитируем сетевую задержку, чтобы UI показывал "загрузка"
+        await new Promise(resolve => setTimeout(resolve, 700))
+
+        const user = findUserByEmail(email)
+
+        // Очень простая "проверка": пароль всегда должен быть "123"
+        if (!user || password !== '123') {
+            // В реальном API сервер вернул бы 401 с текстом ошибки.
+            throw new Error('Неверный email или пароль')
+        }
+
+        // Возвращаем фейковый токен и пользователя.
+        return {
+            token: `fake-token-${user.id}-${Date.now()}`,
+            user,
+        }
+    }
+    // В будущем добавить logout, refreshToken, me() и т.д.
+}

@@ -1,0 +1,261 @@
+<template>
+  <div>
+    <div class="top">
+      <h1 class="page-title">Currency</h1>
+    </div>
+
+    <p v-if="isLoading" class="hint">Загружаем курсы...</p>
+    <p v-else-if="isError" class="error">Ошибка: {{ error?.message }}</p>
+
+    <div v-else class="grid">
+      <!-- Курсы -->
+      <div class="card">
+        <div class="card-title">Курсы (относительно {{ base }})</div>
+
+        <div class="row header">
+          <div>Валюта</div>
+          <div>Курс</div>
+        </div>
+
+        <div
+            v-for="(c, idx) in currencyOrder"
+            :key="c"
+            class="row dnd-row"
+            draggable="true"
+            @dragstart="onDragStart(idx)"
+            @dragover.prevent
+            @drop="onDrop(idx)"
+        >
+          <div class="left">
+            <span class="handle">#</span>
+            <span class="code">{{ c }}</span>
+            <span v-if="idx === 0" class="badge">base</span>
+          </div>
+
+          <div>{{ formatRate(rates[c]) }}</div>
+        </div>
+
+        <p class="hint" v-if="date">Дата: {{ date }}</p>
+      </div>
+
+      <!-- Конвертер -->
+      <div class="card">
+        <div class="card-title">Конвертер</div>
+
+        <div class="conv">
+          <input class="input" type="number" v-model.number="amount" step="0.01" min="0" />
+
+          <select class="select" v-model="from">
+            <option v-for="c in symbols" :key="c" :value="c">{{ c }}</option>
+          </select>
+
+          <span class="arrow"> -></span>
+
+          <select class="select" v-model="to">
+            <option v-for="c in symbols" :key="c" :value="c">{{ c }}</option>
+          </select>
+        </div>
+
+        <div class="result">
+          {{ formatMoney(converted, to) }}
+        </div>
+
+        <p class="hint">
+          Примечание: конвертация считается через текущую base={{ base }}.
+        </p>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import { useRatesQuery } from "../queries/useRatesQuery";
+import type { CurrencyCode } from "../types";
+
+const symbols: CurrencyCode[] = ["RUB", "USD", "EUR"];
+
+// Порядок валют (первая = base)
+const currencyOrder = ref<CurrencyCode[]>(['RUB', 'USD', 'EUR']);
+
+// base всегда верхняя валюта
+const base = computed<CurrencyCode>(() => currencyOrder.value[0] ?? 'RUB');
+// Query теперь будет реагировать на base (computed)
+const { data, isLoading, isError, error } = useRatesQuery(base);
+
+const rates = computed<Record<CurrencyCode, number>>(
+    () => data.value?.rates ?? { RUB: 1, USD: 1, EUR: 1 }
+);
+const date = computed(() => data.value?.date ?? "");
+
+const amount = ref(1000);
+const from = ref<CurrencyCode>('RUB');
+const to = ref<CurrencyCode>('USD');
+
+// Конвертация через base:
+// amount(from→base) * rate(base→to)
+const converted = computed(() => {
+  const r = rates.value;
+
+  const rateBaseToFrom = r[from.value] // base -> from
+  const rateBaseToTo = r[to.value] // base -> to
+
+  if(!rateBaseToFrom || !rateBaseToTo) return 0;
+
+  // from -> base = 1 / (base -> from)
+  const fromToBase = 1 / rateBaseToFrom;
+
+  // base -> to
+  const baseToTo = rateBaseToTo;
+
+  return amount.value * fromToBase * baseToTo;
+});
+
+function formatRate(v: number | undefined) {
+  if(!v) return "-";
+  return new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: 6,
+  }).format(v);
+}
+
+function formatMoney(v: number, currency: CurrencyCode) {
+  if(!v) return "-";
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency,
+  }).format(v);
+}
+
+const draggingIndex = ref<number | null>(null);
+
+function onDragStart(index: number) {
+  draggingIndex.value = index;
+}
+
+function onDrop(targetIndex: number) {
+  const from = draggingIndex.value;
+  if (from === null) return;
+
+  if (from === targetIndex) {
+    draggingIndex.value = null;
+    return;
+  }
+
+  const next = [...currencyOrder.value];
+
+  const removed = next.splice(from, 1);
+  const moved = removed[0];
+  if (!moved) {
+    draggingIndex.value = null;
+    return; // на всякий случай
+  }
+
+  next.splice(targetIndex, 0, moved);
+
+  currencyOrder.value = next;
+  draggingIndex.value = null;
+}
+</script>
+
+<style scoped>
+.top {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom: 12px;
+}
+.page-title {
+  margin:0;
+  font-size:24px;
+  font-weight:600;
+  color:#0f172a;
+}
+
+.grid {
+  display:grid;
+  gap:12px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.card {
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  padding:12px;
+}
+
+.card-title {
+  font-weight:700;
+  color:#0f172a;
+  margin-bottom: 10px;
+}
+
+.row {
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  padding:8px 10px;
+  border:1px solid #e5e7eb;
+  border-radius:10px;
+  margin-bottom: 8px;
+}
+
+.header {
+  background:#f9fafb;
+  font-weight:600;
+}
+
+.conv {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom: 12px;
+}
+
+.input, .select {
+  padding:8px 10px;
+  border-radius:10px;
+  border:1px solid #d1d5db;
+  font-size:14px;
+}
+
+.arrow {
+  font-weight:800;
+  color:#334155;
+}
+
+.result {
+  font-size:20px;
+  font-weight:800;
+  color:#0f172a;
+  margin-bottom: 6px;
+}
+
+.hint {
+  margin:0;
+  font-size:13px;
+  color:#6b7280;
+}
+
+.error {
+  margin:0;
+  font-size:13px;
+  color:#b91c1c;
+}
+
+.handle { opacity: 0.6; }
+.code { font-weight: 700; color: #0f172a; }
+
+.badge {
+  margin-left: 8px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #2563eb;
+  color: #2563eb;
+}
+
+.dnd-row { cursor: grab; user-select: none; }
+.dnd-row:active { cursor: grabbing; }
+
+</style>

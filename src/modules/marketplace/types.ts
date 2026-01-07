@@ -1,0 +1,21 @@
+export type FeatureStatus = 'AVAILABLE' | 'COMING_SOON' | 'IN_DEV';
+
+export type FeatureCode =
+    | 'CHAT'
+    | 'REPORTS'
+    | 'AI_ASSIST'
+    | 'CURRENCY'
+    | 'EXPORTS'
+    | 'RBAC_PLUS';
+
+export type BillingPeriod = 'monthly' | 'yearly' | 'one_time';
+
+export interface FeatureProduct {
+    code: FeatureCode;
+    title: string;
+    description: string;
+    status: FeatureStatus;
+    billing: BillingPeriod;
+    price: number;
+    currency: "RUB" | "USD" | "EUR";
+}

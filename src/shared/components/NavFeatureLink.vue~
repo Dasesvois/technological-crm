@@ -1,0 +1,77 @@
+<template>
+  <!-- Если доступ есть - обычная RouterLink -->
+  <RouterLink v-if="allowed" :to="to" class="nav-link" active-class="active">
+    <slot />
+  </RouterLink>
+
+  <!-- Если доступа нет - ведём в marketplace с locked/from -->
+  <RouterLink
+      v-else
+      :to="lockedTo"
+      class="nav-link locked"
+      title="Фича доступна после покупки"
+  >
+    <span class="lock">🔒</span>
+    <slot />
+  </RouterLink>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue';
+import { useRoute } from 'vue-router';
+import { useEntitlementsStore } from '@/shared/stores/entitlements';
+import type { FeatureCode } from '@/modules/marketplace/types';
+
+const props = defineProps<{
+  to: string;
+  feature?: FeatureCode; // если не передан - это “бесплатный” пункт меню
+}>();
+
+const route = useRoute();
+const ent = useEntitlementsStore();
+
+const allowed = computed(() => {
+  if (!props.feature) return true;
+  return ent.has(props.feature);
+});
+
+const lockedTo = computed(() => {
+  // Возвращаемся на текущую страницу после покупки
+  const from = route.fullPath;
+
+  return {
+    path: '/app/marketplace',
+    query: {
+      locked: props.feature,
+      from,
+    },
+  };
+});
+</script>
+
+<style scoped>
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #0f172a;
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  text-decoration: underline;
+}
+
+.nav-link.active {
+  font-weight: 800;
+}
+
+.nav-link.locked {
+  opacity: 0.85;
+}
+
+.lock {
+  font-size: 14px;
+  line-height: 1;
+}
+</style>

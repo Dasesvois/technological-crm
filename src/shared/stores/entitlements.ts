@@ -5,20 +5,37 @@ export type EntitlementsSource = 'purchase' | 'trial';
 export type EntitlementsStatus = 'active' | 'canceled' | 'expired';
 
 export type EntitlementItem = {
-  code: FeatureCode;
-  source: EntitlementsSource;
-  status: EntitlementsStatus;
-  trialUsed?: boolean; // можно взять trial только один раз
-  purchasedAt: string; // ISO
-  expiresAt?: string; // ISO (trial/ подписка)
-  canceledAt?: string; // ISO
-    receiptId: string; // Чек (MVP - идетиф.)
+    code: FeatureCode;
+    source: EntitlementsSource;
+    status: EntitlementsStatus;
+    purchasedAt: string; // ISO
+    expiresAt?: string; // ISO (trial / подписка)
+    canceledAt?: string; // ISO
+    receiptId: string;
+    trialUsed?: boolean; // чтобы “trial 1 раз”
 };
 
-const STORAGE_KEY = 'crm_entitlements_v2';
+// ✅ Новое: событие - атомарный факт “что произошло”
+export type EntitlementEventType = 'purchase' | 'trial' | 'cancel';
+
+export type EntitlementEvent = {
+    id: string;            // уникальный id события
+    code: FeatureCode;
+    type: EntitlementEventType;
+    at: string;            // ISO когда произошло
+    receiptId: string;     // чек (для cancel тоже можно, как “документ”)
+    // для trial: срок
+    expiresAt?: string;
+};
+
+const STORAGE_KEY = 'crm_entitlements_v3';
 
 function nowIso() {
     return new Date().toISOString();
+}
+
+function makeId(prefix: string) {
+    return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 function makeReceiptId() {
@@ -26,179 +43,274 @@ function makeReceiptId() {
 }
 
 function isIsoExpired(expiresAt?: string) {
-    if(!expiresAt) return false;
+    if (!expiresAt) return false;
     return Date.now() > Date.parse(expiresAt);
 }
 
-// Миграция:
-// новый формат: EntitlementItem[]
-// старый формат: FeatureCode[]
+function buildItemsFromEvents(events: EntitlementEvent[]): EntitlementItem[] {
+    // важное: сортировка по времени, чтобы “история” применялась правильно
+    const sorted = [...events].sort((a, b) => a.at.localeCompare(b.at));
 
-function normalizeStorage(parsed: unknown): EntitlementItem[] {
-    // новый формат (массив объектов)
-    if(Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
-        return (parsed as EntitlementItem[]).map((it) => ({
-           ...it,
+    const map = new Map<FeatureCode, EntitlementItem>();
 
-            // если в старом v2 не было поля — будет undefined, это нормально
-            trialUsed: it.trialUsed ?? (it.source === 'trial' ? true : undefined),
-        }));
+    for (const e of sorted) {
+        const current = map.get(e.code);
+
+        if (e.type === 'purchase') {
+            map.set(e.code, {
+                code: e.code,
+                source: 'purchase',
+                status: 'active',
+                purchasedAt: e.at,
+                receiptId: e.receiptId,
+                trialUsed: current?.trialUsed ?? false, // не теряем факт “trial уже был”
+            });
+            continue;
+        }
+
+        if (e.type === 'trial') {
+            // trial обычно даём, только если нет активной покупки.
+            // тут просто применяем факт.
+            map.set(e.code, {
+                code: e.code,
+                source: 'trial',
+                status: 'active',
+                purchasedAt: e.at,
+                expiresAt: e.expiresAt,
+                receiptId: e.receiptId,
+                trialUsed: true, // как минимум факт “trial использован”
+            });
+            continue;
+        }
+
+        if (e.type === 'cancel') {
+            if (!current) continue;
+
+            map.set(e.code, {
+                ...current,
+                status: 'canceled',
+                canceledAt: e.at,
+            });
+        }
     }
-    // старый формат (массив строк)
-    if(Array.isArray(parsed) && parsed.length === 0 && typeof parsed[0] === 'string') {
-        const codes = parsed as FeatureCode[];
-        const purchasedAt = nowIso();
 
-        return codes.map((code) => ({
-            code,
-            source: 'purchase',
-            status: 'active',
-            purchasedAt,
-            receiptId: makeReceiptId(),
-        }));
+    // если active, но expiresAt истёк - expired
+    for (const [code, it] of map.entries()) {
+        if (it.status === 'active' && isIsoExpired(it.expiresAt)) {
+            map.set(code, { ...it, status: 'expired' });
+        }
     }
-    return [];
+
+    return Array.from(map.values());
 }
 
-function readFromStorage(): EntitlementItem[] {
+// --- Миграции ---
+// v1: FeatureCode[]
+// v2: EntitlementItem[]
+// v3: { events: EntitlementEvent[] }
+function normalizeToV3(parsed: unknown): { events: EntitlementEvent[] } {
+    // уже v3
+    if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'events' in (parsed as any) &&
+        Array.isArray((parsed as any).events)
+    ) {
+        return parsed as { events: EntitlementEvent[] };
+    }
+
+    // v2: массив объектов EntitlementItem
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
+        const items = parsed as EntitlementItem[];
+        const events: EntitlementEvent[] = items.map((it) => ({
+            id: makeId('ev'),
+            code: it.code,
+            type: it.source === 'trial' ? 'trial' : 'purchase',
+            at: it.purchasedAt,
+            receiptId: it.receiptId || makeReceiptId(),
+            expiresAt: it.expiresAt,
+        }));
+
+        // если было canceled - добавим cancel событие
+        for (const it of items) {
+            if (it.status === 'canceled' && it.canceledAt) {
+                events.push({
+                    id: makeId('ev'),
+                    code: it.code,
+                    type: 'cancel',
+                    at: it.canceledAt,
+                    receiptId: makeReceiptId(),
+                });
+            }
+        }
+
+        return { events };
+    }
+
+    // v1: массив строк FeatureCode
+    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'string') {
+        const codes = parsed as FeatureCode[];
+        const at = nowIso();
+        const events: EntitlementEvent[] = codes.map((code) => ({
+            id: makeId('ev'),
+            code,
+            type: 'purchase',
+            at,
+            receiptId: makeReceiptId(),
+        }));
+        return { events };
+    }
+
+    return { events: [] };
+}
+
+function readFromStorageV3(): { events: EntitlementEvent[] } {
     try {
         const raw = localStorage.getItem(STORAGE_KEY);
 
-        // Если новый ключ пуст - попробуем мигрировать со старого v1
+        // если v3 нет - попробуем подтянуть v2/v1
         if (!raw) {
-            const legacyRaw = localStorage.getItem('crm_entitlements_v1');
-            if (!legacyRaw) return [];
-            const legacyParsed = JSON.parse(legacyRaw) as unknown;
-            const migrated = normalizeStorage(legacyParsed);
-            // сразу сохраняем миграцию в v2
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
-            return migrated;
+            const legacyV2 = localStorage.getItem('crm_entitlements_v2');
+            if (legacyV2) {
+                const parsed = JSON.parse(legacyV2) as unknown;
+                const v3 = normalizeToV3(parsed);
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(v3));
+                return v3;
+            }
+
+            const legacyV1 = localStorage.getItem('crm_entitlements_v1');
+            if (legacyV1) {
+                const parsed = JSON.parse(legacyV1) as unknown;
+                const v3 = normalizeToV3(parsed);
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(v3));
+                return v3;
+            }
+
+            return { events: [] };
         }
 
         const parsed = JSON.parse(raw) as unknown;
-        return normalizeStorage(parsed);
+        return normalizeToV3(parsed);
     } catch {
-        return [];
+        return { events: [] };
     }
 }
 
-function writeToStorage(items: EntitlementItem[]) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+function writeToStorageV3(payload: { events: EntitlementEvent[] }) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
 }
 
-export const useEntitlementsStore = defineStore('entitlements',{
-    state: () => ({
-        // Тут список купленных фитч
-        items: readFromStorage(),
-    }),
+export const useEntitlementsStore = defineStore('entitlements', {
+    state: () => {
+        const v3 = readFromStorageV3();
+        const items = buildItemsFromEvents(v3.events);
+
+        return {
+            events: v3.events as EntitlementEvent[],
+            items: items as EntitlementItem[],
+        };
+    },
 
     getters: {
-        // доступ к фиче
+        // доступ к фиче (на основе items)
         has: (state) => (code: FeatureCode) => {
             const it = state.items.find((x) => x.code === code);
-            if(!it) return false;
-
-            if(it.status === 'canceled') return false;
-            if(it.status === 'expired') return false;
-
-            // если срок истёк — считаем недоступным (статус обновим отдельным action)
+            if (!it) return false;
+            if (it.status !== 'active') return false;
             return !isIsoExpired(it.expiresAt);
+
         },
 
-        // получить запись (для UI: дата покупки, чек, expiresAt)
         get: (state) => (code: FeatureCode) => {
             return state.items.find((x) => x.code === code) ?? null;
+        },
+
+        // история по фиче (таймлайн)
+        history: (state) => (code: FeatureCode) => {
+            return [...state.events]
+                .filter((e) => e.code === code)
+                .sort((a, b) => b.at.localeCompare(a.at)); // показываем “последнее сверху”
         },
     },
 
     actions: {
         persist() {
-            writeToStorage(this.items);
+            writeToStorageV3({ events: this.events });
         },
 
-        // помечаем как expired всё, что просрочилось
+        rebuildFromEvents() {
+            this.items = buildItemsFromEvents(this.events);
+        },
+
         syncExpired() {
-            this.items = this.items.map((it) => {
-                if(it.status === 'active' && isIsoExpired(it.expiresAt)) {
-                    return {
-                        ...it,
-                        status: 'expired' as const,
-                    };
-                }
-                return it;
-            });
+            // тут ничего не меняем в events, просто пересчёт items учитывает истечение
+            this.rebuildFromEvents();
             this.persist();
         },
+
         purchase(code: FeatureCode) {
-            const current = this.items.find((x) => x.code === code);
+            // если уже активная покупка - не плодим события
+            const current = this.get(code);
+            if (current && current.source === 'purchase' && this.has(code)) return;
 
-            // если уже активна подписка и не истекла, то ничего не делаем
-            if(current && current.status === 'active' && !isIsoExpired(current.expiresAt)) return;
-
-            const purchasedAt = nowIso();
-
-            const item: EntitlementItem = {
+            this.events.unshift({
+                id: makeId('ev'),
                 code,
-                source: 'purchase',
-                status: 'active',
-                purchasedAt,
+                type: 'purchase',
+                at: nowIso(),
                 receiptId: makeReceiptId(),
+            });
 
-                // сохраняем факт использования триал, если он был
-                trialUsed: current?.trialUsed ?? false,
-            };
-
-            // заменить запись по code
-            this.items = [item, ...this.items.filter((x) => x.code !== code)];
+            this.rebuildFromEvents();
             this.persist();
         },
 
         startTrial(code: FeatureCode, days = 30) {
-            const current = this.items.find((x) => x.code === code);
+            const current = this.get(code);
 
-            // Если trial уже использовали - больше не даём
+            // если уже есть активная покупка - trial не даём
+            if (current && current.source === 'purchase' && this.has(code)) return;
+
+            // если trial уже был использован когда-либо - не даём второй раз
             if (current?.trialUsed) return;
 
-            // Если уже есть активная покупка - trial не нужен
-            if (current?.source === 'purchase' && current.status === 'active' && !isIsoExpired(current.expiresAt)) return;
-
-            const purchasedAt = nowIso();
+            const at = nowIso();
             const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * days).toISOString();
 
-            const item: EntitlementItem = {
+            this.events.unshift({
+                id: makeId('ev'),
                 code,
-                source: 'trial',
-                status: 'active',
-                purchasedAt,
+                type: 'trial',
+                at,
                 expiresAt,
                 receiptId: makeReceiptId(),
-                trialUsed:  true,
-            };
+            });
 
-            this.items = [item, ...this.items.filter((x) => x.code !== code)];
+            this.rebuildFromEvents();
             this.persist();
         },
 
         cancel(code: FeatureCode) {
-            const it = this.items.find((x) => x.code === code);
-            if(!it) return;
+            const current = this.get(code);
+            if (!current) return;
 
-            const canceledAt = nowIso();
+            // если уже canceled/expired - не плодим cancel
+            if (current.status !== 'active') return;
 
-            this.items =    this.items.map((x) => {
-                if(x.code === code) {
-                    return {
-                        ...x,
-                        status: 'canceled',
-                        canceledAt,
-                    };
-                }
-                return x;
+            this.events.unshift({
+                id: makeId('ev'),
+                code,
+                type: 'cancel',
+                at: nowIso(),
+                receiptId: makeReceiptId(),
             });
+
+            this.rebuildFromEvents();
             this.persist();
         },
 
         reset() {
+            this.events = [];
             this.items = [];
             this.persist();
         },

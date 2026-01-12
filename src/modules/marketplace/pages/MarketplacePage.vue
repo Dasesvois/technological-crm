@@ -70,6 +70,17 @@
           </template>
         </div>
 
+        <div class="history" v-if="historyFor(p.code).length">
+          <div class="history-title">История</div>
+
+          <div v-for="e in historyFor(p.code)" :key="e.id" class="history-row">
+            <span class="history-type">{{ eventLabel(e.type) }}</span>
+            <span class="history-date">{{ formatDate(e.at) }}</span>
+            <span class="history-receipt mono">{{ e.receiptId }}</span>
+          </div>
+        </div>
+
+
         <div class="actions">
           <button
             class="btn"
@@ -260,6 +271,17 @@ function formatMoney(amount: number, currency: string) {
   return new Intl.NumberFormat('ru-Ru', { style: 'currency', currency }).format(amount);
 }
 
+function historyFor(code: FeatureCode) {
+  return entitlements.history(code);
+}
+
+function eventLabel(t: 'purchase' | 'trial' | 'cancel') {
+  if (t === 'purchase') return 'Покупка';
+  if (t === 'trial') return 'Trial';
+  return 'Отмена';
+}
+
+
 onMounted(async () => {
   entitlements.syncExpired();
 
@@ -421,6 +443,49 @@ onMounted(async () => {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-weight: 700;
 }
+
+/* HISTORY */
+.history {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px dashed #e5e7eb;
+  border-radius: 12px;
+}
+
+.history-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.history-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.history-type {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.history-date {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.history-receipt {
+  font-size: 12px;
+  text-align: right;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 /* ACTIONS */
 .actions {

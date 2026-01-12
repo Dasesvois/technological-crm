@@ -8,6 +8,7 @@ export type EntitlementItem = {
   code: FeatureCode;
   source: EntitlementsSource;
   status: EntitlementsStatus;
+  trialUsed?: boolean; // можно взять trial только один раз
   purchasedAt: string; // ISO
   expiresAt?: string; // ISO (trial/ подписка)
   canceledAt?: string; // ISO
@@ -36,7 +37,12 @@ function isIsoExpired(expiresAt?: string) {
 function normalizeStorage(parsed: unknown): EntitlementItem[] {
     // новый формат (массив объектов)
     if(Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {
-        return parsed as EntitlementItem[];
+        return (parsed as EntitlementItem[]).map((it) => ({
+           ...it,
+
+            // если в старом v2 не было поля — будет undefined, это нормально
+            trialUsed: it.trialUsed ?? (it.source === 'trial' ? true : undefined),
+        }));
     }
     // старый формат (массив строк)
     if(Array.isArray(parsed) && parsed.length === 0 && typeof parsed[0] === 'string') {
@@ -137,6 +143,9 @@ export const useEntitlementsStore = defineStore('entitlements',{
                 status: 'active',
                 purchasedAt,
                 receiptId: makeReceiptId(),
+
+                // сохраняем факт использования триал, если он был
+                trialUsed: current?.trialUsed ?? false,
             };
 
             // заменить запись по code
@@ -147,8 +156,11 @@ export const useEntitlementsStore = defineStore('entitlements',{
         startTrial(code: FeatureCode, days = 30) {
             const current = this.items.find((x) => x.code === code);
 
-            // если уже активна подписка - триал не выдаем
-            if(current && current.status === 'active' && !isIsoExpired(current.expiresAt)) return;
+            // Если trial уже использовали - больше не даём
+            if (current?.trialUsed) return;
+
+            // Если уже есть активная покупка - trial не нужен
+            if (current?.source === 'purchase' && current.status === 'active' && !isIsoExpired(current.expiresAt)) return;
 
             const purchasedAt = nowIso();
             const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * days).toISOString();
@@ -160,6 +172,7 @@ export const useEntitlementsStore = defineStore('entitlements',{
                 purchasedAt,
                 expiresAt,
                 receiptId: makeReceiptId(),
+                trialUsed:  true,
             };
 
             this.items = [item, ...this.items.filter((x) => x.code !== code)];

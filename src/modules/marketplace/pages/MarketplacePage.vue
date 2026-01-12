@@ -62,6 +62,12 @@
               <span class="meta-value mono">{{ entitlementFor(p.code)?.receiptId }}</span>
             </div>
           </template>
+          <template v-if="entitlementFor(p.code)">
+            <div class="meta-row">
+              <span class="meta-label">Источник:</span>
+              <span class="meta-value">{{ entitlementFor(p.code)?.source }}</span>
+            </div>
+          </template>
         </div>
 
         <div class="actions">
@@ -76,12 +82,12 @@
 
           <!-- Trial: даём только если товар доступен и нет активного доступа -->
           <button
-            v-if="p.status === 'AVAILABLE' && !entitlements.has(p.code)"
             class="btn ghost"
             type="button"
+            :disabled="isTrialDisabled(p.code, p.status)"
             @click="startTrial(p.code)"
           >
-            Trial на 30 дней
+            {{ trialButtonLabel(p.code, p.status) }}
           </button>
 
           <!-- Cancel: показываем если есть запись и она active -->
@@ -161,9 +167,12 @@ function accessLabel(code: FeatureCode) {
   if(it.status === 'canceled') return `Отменено ${formatDate(it.canceledAt)}`;
   if(it.status === 'expired') return `Истекло ${formatDate(it.expiresAt)}`;
 
-  if(it.source === 'trial') return `Триал активен до ${formatDate(it.expiresAt)}`;
-
-  return `Активно до ${formatDate(it.purchasedAt)}`;
+  if(it.source === 'trial') {
+    return it.expiresAt
+        ? `Триал до ${formatDate(it.expiresAt)}`
+        : 'Триал активен';
+  }
+  return `Куплено ${formatDate(it.purchasedAt)}`;
 }
 
 // refs карточек по code (нужно для scrollIntoView)
@@ -186,6 +195,38 @@ function buy(code: FeatureCode) {
 
 function startTrial(code: FeatureCode) {
   entitlements.startTrial(code, 30);
+
+  // если пришли из locked и это нужная фича — возвращаем обратно
+  if(locked.value === code && from.value) {
+    router.push(from.value);
+  }
+}
+
+function isTrialDisabled(code: FeatureCode, status: FeatureStatus) {
+  // trial есть смысл только на AVAILABLE
+  if(status !== 'AVAILABLE') return true;
+
+  const it = entitlements.get(code);
+
+  // если триал уже используется - блокируем
+  if(it?.trialUsed) return true;
+
+  // если уже есть доступ - триал не нужен
+  return entitlements.has(code);
+
+}
+
+function trialButtonLabel(code: FeatureCode, status: FeatureStatus) {
+  if(status !== 'AVAILABLE') return 'Trial недоступен';
+
+  const it = entitlements.get(code);
+  // если есть активный доступ по покупке - trial не нужен
+  if (entitlements.has(code) && it?.source === 'purchase') return 'Куплено';
+  if(entitlements.has(code) && it?.source === 'trial') return 'Trial активен';
+  if(it?.trialUsed) return 'Trial уже был использован';
+
+  return 'Trial 30 дней';
+
 }
 
 function cancel(code: FeatureCode) {
@@ -220,6 +261,8 @@ function formatMoney(amount: number, currency: string) {
 }
 
 onMounted(async () => {
+  entitlements.syncExpired();
+
   await nextTick(); // ждём, пока DOM отрендерит карточки
   const code = locked.value;
   if(!code) return;
@@ -233,127 +276,131 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.page-title { margin: 0 0 8px; font-size: 24px; font-weight: 600; color: #0f172a; }
-.hint { margin: 0 0 14px; font-size: 13px; color: #6b7280; }
+.page-title {
+  margin: 0 0 6px;
+  font-size: clamp(20px, 2.2vw, 28px);
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
 
+.hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+/* GRID */
 .grid {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-items: start;
 }
 
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* CARD */
 .card {
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 12px;
+  border-radius: 16px;
+  padding: 14px;
   display: grid;
-  gap: 10px;
+  gap: 12px;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
 }
 
-.card-top {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.title { font-weight: 700; color: #0f172a; }
-.desc { font-size: 13px; color: #6b7280; margin-top: 4px; }
-
-.badge {
-  font-size: 12px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid #e5e7eb;
-  height: fit-content;
-}
-.badge[data-status="AVAILABLE"] { border-color: #22c55e; color: #16a34a; }
-.badge[data-status="COMING_SOON"] { border-color: #f59e0b; color: #b45309; }
-.badge[data-status="IN_DEV"] { border-color: #94a3b8; color: #475569; }
-
-.price { font-size: 18px; font-weight: 800; color: #0f172a; }
-.billing { font-size: 12px; font-weight: 600; color: #6b7280; margin-left: 4px; }
-
-.actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.btn {
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid #2563eb;
-  background: #2563eb;
-  color: #fff;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-}
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.link {
-  font-size: 13px;
-  color: #2563eb;
-  text-decoration: none;
-}
-.link:hover { text-decoration: underline; }
-
-.locked-banner {
-  margin: 0 0 14px;
-  padding: 12px 12px;
-  border-radius: 14px;
-  border: 1px solid #f59e0b;
-  background: #fffbeb;
-  color: #92400e;
-  display: grid;
-  gap: 6px;
-}
-
-.locked-banner.ok {
-  border-color: #22c55e;
-  background: #f0fdf4;
-  color: #166534;
-}
-
-.locked-title {
-  font-weight: 800;
-  color: inherit;
-}
-
-.locked-sub {
-  font-size: 13px;
-  opacity: 0.9;
-}
-
-.btn.small {
-  padding: 6px 10px;
-  border-radius: 10px;
-  font-size: 13px;
-  width: fit-content;
+.card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
 }
 
 .card.highlight {
   border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12), 0 10px 22px rgba(15, 23, 42, 0.08);
 }
 
+/* CARD TOP */
+.card-top {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.title {
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1.25;
+}
+
+.desc {
+  font-size: 13px;
+  color: #6b7280;
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
+.badge {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  height: fit-content;
+  white-space: nowrap;
+  justify-self: end;
+}
+
+.badge[data-status="AVAILABLE"] { border-color: #22c55e; color: #16a34a; background: rgba(34, 197, 94, 0.06); }
+.badge[data-status="COMING_SOON"] { border-color: #f59e0b; color: #b45309; background: rgba(245, 158, 11, 0.08); }
+.badge[data-status="IN_DEV"] { border-color: #94a3b8; color: #475569; background: rgba(148, 163, 184, 0.12); }
+
+@media (max-width: 420px) {
+  .card-top {
+    grid-template-columns: 1fr;
+  }
+  .badge {
+    justify-self: start;
+  }
+}
+
+/* PRICE */
+.price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 20px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.billing {
+  font-size: 12px;
+  font-weight: 700;
+  color: #6b7280;
+}
+
+/* META */
 .meta {
   display: grid;
-  gap: 6px;
-  padding: 10px;
+  gap: 8px;
+  padding: 12px;
   border: 1px dashed #e5e7eb;
-  border-radius: 12px;
+  border-radius: 14px;
+  background: #fafafa;
 }
 
 .meta-row {
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 10px;
   align-items: baseline;
 }
 
@@ -365,25 +412,168 @@ onMounted(async () => {
 .meta-value {
   font-size: 12px;
   color: #0f172a;
-  font-weight: 600;
+  font-weight: 700;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-weight: 700;
+}
+
+/* ACTIONS */
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: stretch; /* важно: пусть элементы тянутся */
+}
+
+@media (max-width: 900px) {
+  .actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .actions {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* BUTTONS */
+.btn {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  transition: transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.btn:active { transform: translateY(1px); }
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn {
+  width: 100%;
+  display: inline-flex;         /* центрируем текст красиво */
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+
+  padding: 10px 12px;
+  min-height: 42px;             /* чтобы 2 строки помещались */
+  line-height: 1.2;             /* чтобы текст не “резало” */
+  white-space: normal;          /* разрешаем перенос */
+  word-break: break-word;       /* на всякий случай */
+  overflow-wrap: anywhere;      /* если попадётся длинное слово */
+
+  border-radius: 12px;
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
   font-weight: 600;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .btn.ghost {
   background: #fff;
   color: #2563eb;
+  border-color: #cbd5e1;
+}
+
+.btn.ghost:hover {
   border-color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
 }
 
 .btn.danger {
   background: #fff;
   color: #b91c1c;
-  border-color: #b91c1c;
+  border-color: #fecaca;
 }
 
+.btn.danger:hover {
+  background: rgba(185, 28, 28, 0.06);
+  border-color: #fca5a5;
+}
+
+/* LINK */
+.link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  grid-column: 1;
+  font-size: 13px;
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 800;
+  background: #fff;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.link:hover {
+  background: rgba(37, 99, 235, 0.06);
+  border-color: #2563eb;
+  text-decoration: underline;
+}
+
+/* LOCKED BANNER */
+.locked-banner {
+  margin: 0 0 14px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  display: grid;
+  gap: 8px;
+}
+
+.locked-banner.ok {
+  border-color: #22c55e;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.locked-title {
+  font-weight: 900;
+  color: inherit;
+}
+
+.locked-sub {
+  font-size: 13px;
+  opacity: 0.92;
+}
+
+.btn.small {
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+}
 </style>

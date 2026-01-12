@@ -48,6 +48,11 @@
             <span class="label">Чек:</span>
             <span class="value mono">{{ it.receiptId }}</span>
           </div>
+
+          <div class="meta-row">
+            <span class="label">Trial использован:</span>
+            <span class="value">{{ it.trialUsed ? 'да' : 'нет' }}</span>
+          </div>
         </div>
 
         <div class="actions">

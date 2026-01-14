@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import type { FeatureCode } from '@/modules/marketplace/types';
+import { useAuthStore } from '@/modules/auth/stores/useAuthStore';
 
 export type EntitlementsSource = 'purchase' | 'trial';
 export type EntitlementsStatus = 'active' | 'canceled' | 'expired';
@@ -16,7 +17,7 @@ export type EntitlementItem = {
 };
 
 // ✅ Новое: событие - атомарный факт “что произошло”
-export type EntitlementEventType = 'purchase' | 'trial' | 'cancel';
+export type EntitlementEventType = 'purchase' | 'trial' | 'cancel' | 'expire';
 
 export type EntitlementEvent = {
     id: string;            // уникальный id события
@@ -29,6 +30,11 @@ export type EntitlementEvent = {
 };
 
 const STORAGE_KEY = 'crm_entitlements_v3';
+
+function requireAdmin() {
+    const auth = useAuthStore();
+    return auth.userRole === 'admin';
+}
 
 function nowIso() {
     return new Date().toISOString();
@@ -91,6 +97,19 @@ function buildItemsFromEvents(events: EntitlementEvent[]): EntitlementItem[] {
                 status: 'canceled',
                 canceledAt: e.at,
             });
+            continue;
+        }
+
+        if (e.type === 'expire') {
+            if (!current) continue;
+
+            map.set(e.code, {
+                ...current,
+                status: 'expired',
+                // логично: если в событии есть expiresAt — сохраним
+                expiresAt: e.expiresAt ?? current.expiresAt,
+            });
+            continue;
         }
     }
 
@@ -234,79 +253,103 @@ export const useEntitlementsStore = defineStore('entitlements', {
     },
 
     actions: {
+        hasExpireEvent(code: FeatureCode) {
+            return this.history(code).some((e) => e.type === 'expire');
+        },
+
         persist() {
             writeToStorageV3({ events: this.events });
+        },
+
+        trialUsed(code: FeatureCode) {
+            return this.history(code).some((e) => e.type === 'trial');
         },
 
         rebuildFromEvents() {
             this.items = buildItemsFromEvents(this.events);
         },
 
-        syncExpired() {
-            // тут ничего не меняем в events, просто пересчёт items учитывает истечение
-            this.rebuildFromEvents();
-            this.persist();
-        },
-
-        purchase(code: FeatureCode) {
-            // если уже активная покупка - не плодим события
-            const current = this.get(code);
-            if (current && current.source === 'purchase' && this.has(code)) return;
-
+        pushEvent(payload: Omit<EntitlementEvent, 'id'> & { id?: string }) {
             this.events.unshift({
-                id: makeId('ev'),
-                code,
-                type: 'purchase',
-                at: nowIso(),
-                receiptId: makeReceiptId(),
+                id: payload.id ?? makeId('ev'),
+                ...payload,
             });
 
             this.rebuildFromEvents();
             this.persist();
         },
 
+        syncExpired() {
+            const now = nowIso();
+
+            // смотрим текущее состояние items (оно уже построено из events)
+            const toExpire = this.items.filter((it) =>
+                it.status === 'active' &&
+                isIsoExpired(it.expiresAt) &&
+                !this.hasExpireEvent(it.code)
+            );
+
+            for (const it of toExpire) {
+                this.pushEvent({
+                    code: it.code,
+                    type: 'expire',
+                    at: now,
+                    receiptId: it.receiptId,      // норм для MVP
+                    expiresAt: it.expiresAt,      // чтобы в таймлайне было красиво
+                });
+            }
+        },
+
+        purchase(code: FeatureCode) {
+            if (!requireAdmin()) return;
+
+            const current = this.get(code);
+            if (current && current.source === 'purchase' && this.has(code)) return;
+
+            this.pushEvent({
+                code,
+                type: 'purchase',
+                at: nowIso(),
+                receiptId: makeReceiptId(),
+            });
+        },
+
         startTrial(code: FeatureCode, days = 30) {
+            if (!requireAdmin()) return;
+
             const current = this.get(code);
 
             // если уже есть активная покупка - trial не даём
             if (current && current.source === 'purchase' && this.has(code)) return;
 
-            // если trial уже был использован когда-либо - не даём второй раз
-            if (current?.trialUsed) return;
+            // trial 1 раз в жизни - по history
+            if (this.trialUsed(code)) return;
 
             const at = nowIso();
             const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * days).toISOString();
 
-            this.events.unshift({
-                id: makeId('ev'),
+            this.pushEvent({
                 code,
                 type: 'trial',
                 at,
                 expiresAt,
                 receiptId: makeReceiptId(),
             });
-
-            this.rebuildFromEvents();
-            this.persist();
         },
 
         cancel(code: FeatureCode) {
+            if (!requireAdmin()) return;
+
             const current = this.get(code);
             if (!current) return;
-
-            // если уже canceled/expired - не плодим cancel
             if (current.status !== 'active') return;
 
-            this.events.unshift({
-                id: makeId('ev'),
+            this.pushEvent({
                 code,
                 type: 'cancel',
                 at: nowIso(),
                 receiptId: makeReceiptId(),
             });
-
-            this.rebuildFromEvents();
-            this.persist();
         },
 
         reset() {

@@ -29,7 +29,10 @@ const routes: RouteRecordRaw[] = [
             { path: 'dashboard', name: 'dashboard', component: DashboardPage },
             { path: 'deals', name: 'deals', component: DealsPage },
 
-            { path: 'marketplace', name: 'marketplace', component: MarketplacePage },
+            { path: 'marketplace',
+                name: 'marketplace',
+                component: MarketplacePage,
+            },
 
             {
                 path: 'currency',

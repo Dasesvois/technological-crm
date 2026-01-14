@@ -2,6 +2,10 @@
   <div>
     <h1 class="page-title">Marketplace</h1>
     <p class="hint">Покупаем “доп. модули” как товары. Это тренировочный модуль.</p>
+    <div v-if="!isAdmin" class="locked-banner" style="border-color:#94a3b8;background:#f8fafc;color:#334155;">
+      <div class="locked-title">ℹ️ Доступ только для admin</div>
+      <div class="locked-sub">Ты можешь смотреть витрину, но покупки/триалы доступны только администратору.</div>
+    </div>
 
     <div v-if="locked && !entitlements.has(locked)" class="locked-banner">
       <div class="locked-title">🔒 Модуль “{{ lockedTitle }}” недоступен</div>
@@ -83,33 +87,36 @@
 
         <div class="actions">
           <button
-            class="btn"
-            type="button"
-            :disabled="isDisabled(p.code, p.status)"
-            @click="buy(p.code)"
+              class="btn"
+              type="button"
+              :disabled="!isAdmin || isDisabled(p.code, p.status)"
+              @click="buy(p.code)"
           >
-            {{ buttonLabel(p.code, p.status) }}
+            {{ !isAdmin ? 'Только admin' : buttonLabel(p.code, p.status) }}
           </button>
 
           <!-- Trial: даём только если товар доступен и нет активного доступа -->
           <button
-            class="btn ghost"
-            type="button"
-            :disabled="isTrialDisabled(p.code, p.status)"
-            @click="startTrial(p.code)"
+              class="btn ghost"
+              type="button"
+              :disabled="!isAdmin || isTrialDisabled(p.code, p.status)"
+              @click="startTrial(p.code)"
           >
-            {{ trialButtonLabel(p.code, p.status) }}
+            {{ !isAdmin ? 'Только admin' : trialButtonLabel(p.code, p.status) }}
           </button>
+
 
           <!-- Cancel: показываем если есть запись и она active -->
           <button
-            v-if="entitlementFor(p.code)?.status === 'active'"
-            class="btn danger"
-            type="button"
-            @click="cancel(p.code)"
+              v-if="entitlementFor(p.code)?.status === 'active'"
+              class="btn danger"
+              type="button"
+              :disabled="!isAdmin"
+              @click="cancel(p.code)"
           >
-            Отменить
+            {{ !isAdmin ? 'Только admin' : 'Отменить' }}
           </button>
+
 
           <RouterLink
               to="/app/currency"
@@ -129,11 +136,15 @@ import { computed, nextTick, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { FEATURE_CATALOG } from "../catalog";
 import { useEntitlementsStore } from '@/shared/stores/entitlements';
+import { useAuthStore } from "@/modules/auth/stores/useAuthStore";
 import type { FeatureCode, FeatureStatus, BillingPeriod } from "../types";
 import type { ComponentPublicInstance } from 'vue';
 import type { EntitlementItem } from "@/shared/stores/entitlements";
 
 const entitlements = useEntitlementsStore();
+
+const auth = useAuthStore();
+const isAdmin = computed(() => auth.userRole === 'admin');
 
 const route = useRoute();
 const router = useRouter();
@@ -175,7 +186,11 @@ function accessLabel(code: FeatureCode) {
 
   // если истёк expiresAt, стор уже может считать недоступным,
   // но запись всё равно покажем.
-  if(it.status === 'canceled') return `Отменено ${formatDate(it.canceledAt)}`;
+  if (it.status === 'canceled') {
+    const what = it.source === 'trial' ? 'Триал' : 'Подписка';
+    return `${what} отменён(а) ${formatDate(it.canceledAt)}`;
+  }
+
   if(it.status === 'expired') return `Истекло ${formatDate(it.expiresAt)}`;
 
   if(it.source === 'trial') {
@@ -208,36 +223,28 @@ function startTrial(code: FeatureCode) {
   entitlements.startTrial(code, 30);
 
   // если пришли из locked и это нужная фича — возвращаем обратно
-  if(locked.value === code && from.value) {
+  if (locked.value === code && from.value && entitlements.has(code)) {
     router.push(from.value);
   }
 }
 
 function isTrialDisabled(code: FeatureCode, status: FeatureStatus) {
-  // trial есть смысл только на AVAILABLE
-  if(status !== 'AVAILABLE') return true;
-
-  const it = entitlements.get(code);
-
-  // если триал уже используется - блокируем
-  if(it?.trialUsed) return true;
-
-  // если уже есть доступ - триал не нужен
-  return entitlements.has(code);
-
+  if (status !== 'AVAILABLE') return true;
+  if (entitlements.has(code)) return true;        // активный доступ уже есть
+  if (entitlements.trialUsed(code)) return true;  // trial уже был
+  return false;
 }
 
 function trialButtonLabel(code: FeatureCode, status: FeatureStatus) {
-  if(status !== 'AVAILABLE') return 'Trial недоступен';
+  if (status !== 'AVAILABLE') return 'Trial недоступен';
 
   const it = entitlements.get(code);
-  // если есть активный доступ по покупке - trial не нужен
+
   if (entitlements.has(code) && it?.source === 'purchase') return 'Куплено';
-  if(entitlements.has(code) && it?.source === 'trial') return 'Trial активен';
-  if(it?.trialUsed) return 'Trial уже был использован';
+  if (entitlements.has(code) && it?.source === 'trial') return 'Trial активен';
+  if (entitlements.trialUsed(code)) return 'Trial уже был';
 
   return 'Trial 30 дней';
-
 }
 
 function cancel(code: FeatureCode) {
@@ -275,10 +282,11 @@ function historyFor(code: FeatureCode) {
   return entitlements.history(code);
 }
 
-function eventLabel(t: 'purchase' | 'trial' | 'cancel') {
+function eventLabel(t: 'purchase' | 'trial' | 'cancel' | 'expire') {
   if (t === 'purchase') return 'Покупка';
   if (t === 'trial') return 'Trial';
-  return 'Отмена';
+  if (t === 'cancel') return 'Отмена';
+  return 'Истечение';
 }
 
 
@@ -514,16 +522,6 @@ onMounted(async () => {
 }
 
 /* BUTTONS */
-.btn {
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid transparent;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 800;
-  transition: transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease;
-}
 
 .btn:active { transform: translateY(1px); }
 
@@ -539,6 +537,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   text-align: center;
+  transition: transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease;
 
   padding: 10px 12px;
   min-height: 42px;             /* чтобы 2 строки помещались */
@@ -554,6 +553,11 @@ onMounted(async () => {
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
+}
+
+.btn:hover {
+  background: #497beb;
+  text-decoration: underline;
 }
 
 .btn:disabled {

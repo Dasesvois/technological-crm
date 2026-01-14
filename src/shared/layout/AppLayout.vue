@@ -145,13 +145,13 @@ const onLogout = () => {
 }
 
 .sidebar a,
-.sidebar .router-link-active {
+.sidebar {
   text-decoration: none;
   color: #111827;
   font-size: 14px;
 }
 
-.sidebar .router-link-active {
+.sidebar {
   font-weight: 600;
 }
 
